@@ -3,7 +3,8 @@ import {
   FileText, Image as ImageIcon, Plus, Trash, Download, Copy, Check, 
   Terminal, Sparkles, MoveLeft, MoveRight, HelpCircle, 
   ArrowRight, ShieldCheck, RefreshCw, Layers, Sliders, Menu, X, Info,
-  RotateCw, Sun, Moon, Star, CheckSquare, Search, ZoomIn, LayoutGrid, List, Grid, Crop, Scissors, Undo
+  RotateCw, Sun, Moon, Star, CheckSquare, Search, ZoomIn, LayoutGrid, List, Grid, Crop, Scissors, Undo,
+  ArrowDownAZ, ArrowUpZA, Hash, ChevronDown, ArrowUpDown, SlidersHorizontal
 } from 'lucide-react';
 import { PDFDocument, degrees } from 'pdf-lib';
 import { WorkspaceItem, AppView, SavedPDFBundle } from './types';
@@ -254,6 +255,16 @@ const normalizeFileSize = (sizeInput: string | number | undefined): string => {
   return sizeInput;
 };
 
+const formatKbToSize = (kb: number): string => {
+  if (kb >= 1024 * 1024) {
+    return `${(kb / (1024 * 1024)).toFixed(2)} GB`;
+  }
+  if (kb >= 1024) {
+    return `${(kb / 1024).toFixed(2)} MB`;
+  }
+  return `${kb.toFixed(1)} KB`;
+};
+
 const convertSvgToPngDataUrl = (svgDataUrl: string): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -387,6 +398,13 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState<string>('');
   const [zoomedItem, setZoomedItem] = useState<WorkspaceItem | null>(null);
 
+  // Page Metadata Editor States
+  const [metadataEditingItem, setMetadataEditingItem] = useState<WorkspaceItem | null>(null);
+  const [metaName, setMetaName] = useState<string>('');
+  const [metaDescription, setMetaDescription] = useState<string>('');
+  const [metaAuthor, setMetaAuthor] = useState<string>('');
+  const [metaTagsInput, setMetaTagsInput] = useState<string>('');
+
   // Automatically opt-in to compile selected pages when some pages are selected on modal open
   useEffect(() => {
     if (showExportModal) {
@@ -399,7 +417,8 @@ export default function App() {
   const bundleFileInputRef = useRef<HTMLInputElement>(null);
 
   const [fileTypeFilter, setFileTypeFilter] = useState<'all' | 'pdf' | 'png' | 'jpeg'>('all');
-  const [sizeSortActive, setSizeSortActive] = useState<'none' | 'biggest'>('none');
+  const [sizeSortActive, setSizeSortActive] = useState<string>('none');
+  const [showSortDropdown, setShowSortDropdown] = useState<boolean>(false);
   const [viewLayout, setViewLayout] = useState<'full' | 'list' | 'mini'>('full');
   const [jpegQuality, setJpegQuality] = useState<number>(85);
   const [libraryTab, setLibraryTab] = useState<'pages' | 'pdfs'>('pages');
@@ -410,6 +429,10 @@ export default function App() {
   const [cropRight, setCropRight] = useState<number>(0);
   const [cropTop, setCropTop] = useState<number>(0);
   const [cropBottom, setCropBottom] = useState<number>(0);
+
+  // Drag over states for drop indication
+  const [isWorkspaceDragging, setIsWorkspaceDragging] = useState<boolean>(false);
+  const [isSavedLibraryDragging, setIsSavedLibraryDragging] = useState<boolean>(false);
 
   const [favorites, setFavorites] = useState<WorkspaceItem[]>([]);
   const [savedPDFBundles, setSavedPDFBundles] = useState<SavedPDFBundle[]>([]);
@@ -508,12 +531,16 @@ export default function App() {
   const t = THEMES[currentTheme as keyof typeof THEMES] || THEMES.violet;
   const ta = THEME_ACCENTS[currentTheme as keyof typeof THEME_ACCENTS] || THEME_ACCENTS.violet;
 
-  const parsedSizeInKB = (sizeStr?: string): number => {
-    if (!sizeStr) return 0;
-    const match = sizeStr.match(/(\d+)\s*KB/i);
-    if (match) return parseInt(match[1]);
-    const mbMatch = sizeStr.match(/([\d\.]+)\s*MB/i);
-    if (mbMatch) return parseFloat(mbMatch[1]) * 1024;
+  const parsedSizeInKB = (sizeInput?: string | number): number => {
+    if (sizeInput === undefined || sizeInput === null) return 0;
+    if (typeof sizeInput === 'number') return sizeInput / 1024;
+    const match = sizeInput.match(/([\d\.,]+)\s*KB/i);
+    if (match) return parseFloat(match[1].replace(/,/g, ''));
+    const mbMatch = sizeInput.match(/([\d\.,]+)\s*MB/i);
+    if (mbMatch) return parseFloat(mbMatch[1].replace(/,/g, '')) * 1024;
+    if (sizeInput === 'Custom') return 0;
+    const n = parseFloat(sizeInput);
+    if (!isNaN(n)) return n / 1024;
     return 0;
   };
 
@@ -533,7 +560,67 @@ export default function App() {
 
   if (sizeSortActive === 'biggest') {
     displayedItems.sort((a, b) => parsedSizeInKB(b.fileSize) - parsedSizeInKB(a.fileSize));
+  } else if (sizeSortActive === 'size_asc') {
+    displayedItems.sort((a, b) => parsedSizeInKB(a.fileSize) - parsedSizeInKB(b.fileSize));
+  } else if (sizeSortActive === 'name_asc') {
+    displayedItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  } else if (sizeSortActive === 'name_desc') {
+    displayedItems.sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' }));
+  } else if (sizeSortActive === 'num_asc') {
+    displayedItems.sort((a, b) => {
+      // Prioritize pageIndex if present
+      const aPage = a.pageIndex !== undefined ? a.pageIndex : -1;
+      const bPage = b.pageIndex !== undefined ? b.pageIndex : -1;
+      if (aPage !== bPage && aPage !== -1 && bPage !== -1) {
+        return aPage - bPage;
+      }
+      // Otherwise extract numbers from name
+      const aMatch = a.name.match(/\d+/);
+      const bMatch = b.name.match(/\d+/);
+      if (aMatch && bMatch) {
+        const numA = parseInt(aMatch[0], 10);
+        const numB = parseInt(bMatch[0], 10);
+        if (numA !== numB) {
+          return numA - numB;
+        }
+      } else if (aMatch) {
+         return -1;
+      } else if (bMatch) {
+         return 1;
+      }
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  } else if (sizeSortActive === 'num_desc') {
+    displayedItems.sort((a, b) => {
+      const aPage = a.pageIndex !== undefined ? a.pageIndex : -1;
+      const bPage = b.pageIndex !== undefined ? b.pageIndex : -1;
+      if (aPage !== bPage && aPage !== -1 && bPage !== -1) {
+        return bPage - aPage;
+      }
+      const aMatch = a.name.match(/\d+/);
+      const bMatch = b.name.match(/\d+/);
+      if (aMatch && bMatch) {
+        const numA = parseInt(aMatch[0], 10);
+        const numB = parseInt(bMatch[0], 10);
+        if (numA !== numB) {
+          return numB - numA;
+        }
+      } else if (aMatch) {
+         return 1;
+      } else if (bMatch) {
+         return -1;
+      }
+      return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
   }
+
+  // File size calculations (KB, MB, GB formats)
+  const totalWorkspaceKB = items.reduce((acc, item) => acc + parsedSizeInKB(item.fileSize), 0);
+  const totalFavoritesKB = favorites.reduce((acc, f) => acc + parsedSizeInKB(f.fileSize), 0);
+  const totalBundlesKB = savedPDFBundles.reduce((acc, b) => acc + parsedSizeInKB(b.fileSize), 0);
+  const totalLibraryKB = totalFavoritesKB + totalBundlesKB;
+  const libraryMaxLimitKB = 150 * 1024; // 150 MB is are default standard limit for web browser persistent sandbox
+  const libraryPercentage = Math.min(100, (totalLibraryKB / libraryMaxLimitKB) * 100);
 
   // Sync selected details with initial state loading
   useEffect(() => {
@@ -788,6 +875,53 @@ export default function App() {
     setStatus(`Added all ${newItems.length} pages from whole PDF template "${bundle.name}" to workspace.`);
   };
 
+  const handleOpenMetadataEditor = (item: WorkspaceItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMetadataEditingItem(item);
+    setMetaName(item.name);
+    setMetaDescription(item.description || '');
+    setMetaAuthor(item.author || '');
+    setMetaTagsInput(item.tags ? item.tags.join(', ') : '');
+  };
+
+  const handleSaveMetadata = () => {
+    if (!metadataEditingItem) return;
+    
+    const processedTags = metaTagsInput
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0);
+
+    const updatedItems = items.map(item => {
+      if (item.id === metadataEditingItem.id) {
+        return {
+          ...item,
+          name: metaName,
+          description: metaDescription,
+          author: metaAuthor,
+          tags: processedTags
+        };
+      }
+      return item;
+    });
+
+    setItems(updatedItems);
+    saveWorkspaceToDb(updatedItems); // Sync with IndexedDB persistence automatically!
+    
+    if (selectedDocDetails && selectedDocDetails.id === metadataEditingItem.id) {
+      setSelectedDocDetails({
+        ...selectedDocDetails,
+        name: metaName,
+        description: metaDescription,
+        author: metaAuthor,
+        tags: processedTags
+      });
+    }
+
+    setMetadataEditingItem(null);
+    setStatus(`Successfully updated metadata for "${metaName}".`);
+  };
+
   // Save the complete current workspace design layout as a PDF bundle template helper
   const handleSaveActiveWorkspaceAsBundle = () => {
     if (items.length === 0) {
@@ -810,7 +944,15 @@ export default function App() {
   // Handle local workspace file drops from the sidebar library
   const handleWorkspaceDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    setIsWorkspaceDragging(false);
     try {
+      // Prioritize physical files dropped from desktop/file explorer
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        readAndProcessFiles(e.dataTransfer.files, 'workspace');
+        return;
+      }
+      
+      // Fallback to internal JSON data for layout elements/saved sidebar components
       const dataStr = e.dataTransfer.getData('application/json');
       if (dataStr) {
         const data = JSON.parse(dataStr);
@@ -1196,6 +1338,7 @@ export default function App() {
       }
 
       // Trigger native client side browser download
+      // @ts-ignore
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
       const downloadUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1304,7 +1447,40 @@ export default function App() {
 
             {/* SAVED LIBRARY COLUMN (Persistent Drag & Drop assets repository sidebar) */}
             <section className="lg:col-span-3 flex flex-col space-y-6">
-              <div className={`${t.bgCard} border border-dashed ${t.borderCard} rounded-[24px] p-5 shadow-2xl relative flex flex-col h-full`}>
+              <div 
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsSavedLibraryDragging(true);
+                }}
+                onDragLeave={() => setIsSavedLibraryDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsSavedLibraryDragging(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    readAndProcessFiles(e.dataTransfer.files, libraryTab === 'pages' ? 'favorites' : 'bundle');
+                  }
+                }}
+                className={`${
+                  isSavedLibraryDragging 
+                    ? 'bg-[#191523]/95 border-amber-500 shadow-[0_0_30px_rgba(245,158,11,0.22)] border-2' 
+                    : `${t.bgCard} border ${t.borderCard}`
+                } border-dashed rounded-[24px] p-5 shadow-2xl relative flex flex-col h-full transition-all duration-300`}
+              >
+                {isSavedLibraryDragging && (
+                  <div className="absolute inset-0 bg-amber-500/10 backdrop-blur-[2px] rounded-[24px] z-50 flex flex-col items-center justify-center border-2 border-dashed border-amber-400/90 pointer-events-none animate-fade-in">
+                    <div className="bg-[#120e17] border border-amber-500/50 rounded-2xl p-4 text-center shadow-2xl max-w-[210px] flex flex-col items-center gap-2">
+                      <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center animate-bounce">
+                        <Plus className="w-5 h-5 animate-pulse" />
+                      </div>
+                      <h4 className="text-[11.5px] font-black text-white uppercase font-mono tracking-wider">Drop into Library</h4>
+                      <p className="text-[9.5px] text-slate-400 leading-relaxed font-sans">
+                        {libraryTab === 'pages' 
+                          ? "Imports page templates directly into your collection!" 
+                          : "Upload documents to whole layout library."}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <div className="absolute top-0 right-0 w-20 h-20 bg-amber-500/5 rounded-full blur-xl pointer-events-none" />
 
                 <div className="flex items-center justify-between pb-3 border-b border-[#232035]/85">
@@ -1317,11 +1493,31 @@ export default function App() {
                   </span>
                 </div>
 
-                <p className="text-[11px] text-slate-400 leading-relaxed mt-3">
+                <p className="text-[11px] text-slate-400 leading-relaxed mt-2.5">
                   {libraryTab === 'pages' 
                     ? "Store single template forms, brand headers, or signatures. Drag onto Workspace board or click '+'." 
                     : "Store entire multi-page document templates or design layouts. Drag document to load all pages at once!"}
                 </p>
+
+                {/* Library Capacity / Limit visual feedback HUD */}
+                <div className="mt-3 bg-slate-950/45 border border-slate-800/80 rounded-xl p-3 select-none">
+                  <div className="flex items-center justify-between text-[10.5px]">
+                    <span className="text-slate-400 font-medium">Saved Library Size:</span>
+                    <span className="font-mono font-bold text-amber-400">
+                      {formatKbToSize(totalLibraryKB)} <span className="text-slate-500">/ 150.0 MB</span>
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden mt-1.5 border border-slate-800/30">
+                    <div 
+                      className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-orange-400 rounded-full transition-all duration-500"
+                      style={{ width: `${libraryPercentage}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between mt-1 text-[9px] text-slate-500 font-mono">
+                    <span>{libraryPercentage.toFixed(1)}% Bound Space Used</span>
+                    <span>Max Shared Limit</span>
+                  </div>
+                </div>
 
                 {/* Tab Switcher */}
                 <div className="flex bg-[#1C1A2D] p-1 rounded-xl border border-slate-800/80 mt-3 items-center matches-glow">
@@ -1809,10 +2005,31 @@ export default function App() {
 
               {/* Workspace Board Container */}
               <div 
-                onDragOver={(e) => e.preventDefault()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsWorkspaceDragging(true);
+                }}
+                onDragLeave={() => setIsWorkspaceDragging(false)}
                 onDrop={handleWorkspaceDrop}
-                className={`${listThemeMode === 'light' ? 'bg-gradient-to-b from-slate-50 to-white' : t.bgCard} border border-dashed ${listThemeMode === 'light' ? 'border-slate-300/85' : t.borderCard} rounded-[24px] p-6 shadow-2xl flex-1 flex flex-col transition-all duration-300`}
+                className={`${
+                  listThemeMode === 'light' 
+                    ? isWorkspaceDragging ? 'bg-[#f0f4ff] border-indigo-400 shadow-[0_0_25px_rgba(99,102,241,0.22)]' : 'bg-gradient-to-b from-slate-50 to-white border-slate-300/85' 
+                    : isWorkspaceDragging ? 'bg-[#141029] border-indigo-505 shadow-[0_0_35px_rgba(99,102,241,0.25)]' : `${t.bgCard} ${t.borderCard}`
+                } border-2 border-dashed rounded-[24px] p-6 shadow-2xl flex-1 flex flex-col transition-all duration-300 relative`}
               >
+                {isWorkspaceDragging && (
+                  <div className="absolute inset-0 bg-indigo-500/10 backdrop-blur-[2px] rounded-[24px] z-50 flex flex-col items-center justify-center border-2 border-dashed border-indigo-400/90 pointer-events-none animate-fade-in">
+                    <div className="bg-slate-900/95 border border-indigo-500/50 rounded-2xl p-6 text-center shadow-2xl max-w-sm mx-4 flex flex-col items-center gap-3">
+                      <div className="w-12 h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center animate-bounce">
+                        <ArrowUpDown className="w-6 h-6" />
+                      </div>
+                      <h4 className="text-sm font-extrabold text-white">Drop here to load into Workspace</h4>
+                      <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                        Extract individual pages from document PDFs or import high-fidelity images instantly!
+                      </p>
+                    </div>
+                  </div>
+                )}
                 
                 <div className={`flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b ${listThemeMode === 'light' ? 'border-slate-200' : t.borderHeader} mb-6`}>
                   <div className="flex-1 min-w-0">
@@ -1820,6 +2037,13 @@ export default function App() {
                       <span className={listThemeMode === 'light' ? 'text-slate-800' : 'text-white'}>Interactive Local Workspace</span>
                       <span className={`text-xs ${listThemeMode === 'light' ? 'bg-slate-200 text-slate-700' : t.badgeBg} font-mono px-2 py-0.5 rounded-md font-bold`}>
                         {items.length} Page{items.length === 1 ? '' : 's'}
+                      </span>
+                      <span className={`text-xs ${
+                        listThemeMode === 'light'
+                          ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50'
+                          : 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                      } font-mono px-2 py-0.5 rounded-md font-bold`}>
+                        Workspace Size: {formatKbToSize(totalWorkspaceKB)}
                       </span>
                     </h2>
                     <p className={`text-xs ${listThemeMode === 'light' ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
@@ -1962,22 +2186,99 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Sort Selector */}
-                      <div className="flex flex-col gap-1.5 shrink-0 w-full lg:w-auto lg:min-w-[185px]">
-                        <label className="text-[10px] font-mono uppercase font-bold text-slate-400 tracking-wider">Sort Arrangement:</label>
-                        <select
-                          value={sizeSortActive}
-                          onChange={(e) => setSizeSortActive(e.target.value as 'none' | 'biggest')}
-                          className={`w-full px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer border ${
-                            listThemeMode === 'light'
-                              ? 'bg-white border-slate-200 text-slate-800 shadow-sm'
-                              : 'bg-slate-900 border-[#24213B] text-slate-300 shadow-inner'
-                          } focus:outline-none focus:ring-1`}
-                          style={{ focusRingColor: t.primary }}
-                        >
-                          <option value="none" className="text-xs">Original Arrangement</option>
-                          <option value="biggest" className="text-xs">File Size: Largest First</option>
-                        </select>
+                      {/* Interactive Sort Dropdown with Icons */}
+                      <div className="flex flex-col gap-1.5 shrink-0 w-full lg:w-auto lg:min-w-[210px] relative border-0">
+                        <label className="text-[10px] font-mono uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                          Sort Arrangement:
+                        </label>
+                        
+                        <div className="relative">
+                          {/* Selected Trigger Button */}
+                          <button
+                            type="button"
+                            onClick={() => setShowSortDropdown(!showSortDropdown)}
+                            className={`w-full px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer border flex items-center justify-between gap-2 transition-all outline-none ${
+                              listThemeMode === 'light'
+                                ? 'bg-white border-slate-200 text-slate-800 shadow-sm hover:bg-slate-50'
+                                : 'bg-slate-900 border-[#24213B] text-slate-300 shadow-inner hover:bg-slate-850'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 truncate">
+                              {sizeSortActive === 'none' && <LayoutGrid className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
+                              {sizeSortActive === 'name_asc' && <ArrowDownAZ className="w-3.5 h-3.5 text-emerald-450 shrink-0" />}
+                              {sizeSortActive === 'name_desc' && <ArrowUpZA className="w-3.5 h-3.5 text-teal-400 shrink-0" />}
+                              {sizeSortActive === 'num_asc' && <Hash className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                              {sizeSortActive === 'num_desc' && <Hash className="w-3.5 h-3.5 text-orange-400 shrink-0" />}
+                              {sizeSortActive === 'biggest' && <SlidersHorizontal className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+                              {sizeSortActive === 'size_asc' && <SlidersHorizontal className="w-3.5 h-3.5 text-pink-400 shrink-0" />}
+                              
+                              <span className="truncate">
+                                {sizeSortActive === 'none' && 'Original Sequence'}
+                                {sizeSortActive === 'name_asc' && 'Alphabetical: A - Z'}
+                                {sizeSortActive === 'name_desc' && 'Alphabetical: Z - A'}
+                                {sizeSortActive === 'num_asc' && 'Numerical: Low to High'}
+                                {sizeSortActive === 'num_desc' && 'Numerical: High to Low'}
+                                {sizeSortActive === 'biggest' && 'Size: Largest First'}
+                                {sizeSortActive === 'size_asc' && 'Size: Smallest First'}
+                              </span>
+                            </span>
+                            <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-60" />
+                          </button>
+
+                          {/* Invisible Backdrop overlay for dismiss */}
+                          {showSortDropdown && (
+                            <div 
+                              className="fixed inset-0 z-30 cursor-default" 
+                              onClick={() => setShowSortDropdown(false)}
+                            />
+                          )}
+
+                          {/* Floating Dropdown Menu options list */}
+                          {showSortDropdown && (
+                            <div 
+                              className={`absolute left-0 right-0 mt-1.5 rounded-2xl border p-1.5 shadow-[0_10px_35px_rgba(0,0,0,0.55)] z-40 animate-scale-up ${
+                                listThemeMode === 'light'
+                                  ? 'bg-white/95 border-slate-200 text-slate-800'
+                                  : 'bg-[#141221]/95 border-[#2D2A43] text-slate-350'
+                              } backdrop-blur-md`}
+                            >
+                              <div className="space-y-0.5">
+                                {[
+                                  { value: 'none', label: 'Original Sequence', icon: <LayoutGrid className="w-3.5 h-3.5 text-indigo-400 shrink-0" /> },
+                                  { value: 'name_asc', label: 'Alphabetical: A - Z', icon: <ArrowDownAZ className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> },
+                                  { value: 'name_desc', label: 'Alphabetical: Z - A', icon: <ArrowUpZA className="w-3.5 h-3.5 text-teal-400 shrink-0" /> },
+                                  { value: 'num_asc', label: 'Numerical: Low to High', icon: <Hash className="w-3.5 h-3.5 text-amber-400 shrink-0" /> },
+                                  { value: 'num_desc', label: 'Numerical: High to Low', icon: <Hash className="w-3.5 h-3.5 text-orange-400 shrink-0" /> },
+                                  { value: 'biggest', label: 'Size: Largest First', icon: <SlidersHorizontal className="w-3.5 h-3.5 text-purple-400 shrink-0" /> },
+                                  { value: 'size_asc', label: 'Size: Smallest First', icon: <SlidersHorizontal className="w-3.5 h-3.5 text-pink-400 shrink-0" /> },
+                                ].map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => {
+                                      setSizeSortActive(opt.value);
+                                      setShowSortDropdown(false);
+                                    }}
+                                    className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-xl transition-colors cursor-pointer text-left ${
+                                      sizeSortActive === opt.value
+                                        ? listThemeMode === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-slate-800/80 text-white'
+                                        : listThemeMode === 'light' ? 'hover:bg-slate-50 text-slate-700' : 'hover:bg-slate-900/60 text-slate-400'
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      {opt.icon}
+                                      <span>{opt.label}</span>
+                                    </span>
+                                    {sizeSortActive === opt.value && (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 stroke-[2.5]" />
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Layout Mode Selector (Icon buttons switcher) */}
@@ -2164,6 +2465,18 @@ export default function App() {
                                     >
                                       <ZoomIn className="w-3.5 h-3.5" />
                                     </button>
+
+                                    {/* Edit Page Metadata button */}
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenMetadataEditor(item);
+                                      }}
+                                      className="absolute bottom-1.5 left-9 p-1.5 bg-slate-900/95 hover:bg-indigo-650 hover:text-white text-indigo-400 hover:border-indigo-500/50 rounded-md transition-all pointer-events-auto border border-slate-800/60 flex items-center justify-center cursor-pointer shadow-md z-15 active:scale-95"
+                                      title="Edit Page Metadata (Tags, Description, Author)"
+                                    >
+                                      <Sliders className="w-3.5 h-3.5" />
+                                    </button>
         
                                     {/* Document Type Watermark Overlay */}
                                     <div className="absolute bottom-1 right-1 opacity-25">
@@ -2174,7 +2487,7 @@ export default function App() {
                                       )}
                                     </div>
                                   </div>
-        
+         
                                   {/* Meta Information Footer */}
                                   <div className="mt-3">
                                     <p className={`text-xs font-semibold truncate pr-6 ${
@@ -2201,7 +2514,7 @@ export default function App() {
                                       </span>
                                       <span className={`text-[12px] font-black ${ta.text}`}>{normalizeFileSize(item.fileSize)}</span>
                                     </div>
-        
+         
                                     {(item.width && item.height) && (
                                       <div className={`flex items-center justify-between mt-2 pt-2 border-t text-[10.5px] font-mono ${
                                         listThemeMode === 'light' ? 'border-slate-200 text-slate-500' : 'border-slate-800/30 text-slate-500'
@@ -2224,6 +2537,43 @@ export default function App() {
                                                 : item.aspectRatio)
                                               : item.aspectRatio}
                                           </span>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Custom Page Metadata Display Container if values present */}
+                                    {(item.description || item.author || (item.tags && item.tags.length > 0)) && (
+                                      <div className={`mt-2.5 pt-2.5 border-t ${listThemeMode === 'light' ? 'border-slate-150' : 'border-slate-800/30'} flex flex-col gap-1.5`}>
+                                        {item.author && (
+                                          <div className="flex items-center gap-1.5 text-[10px]">
+                                            <span className="text-slate-500 font-medium font-sans">Author:</span>
+                                            <span className={`font-bold font-sans px-1.5 py-0.5 rounded ${
+                                              listThemeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-slate-900 text-slate-300'
+                                            }`}>{item.author}</span>
+                                          </div>
+                                        )}
+                                        {item.description && (
+                                          <p className={`text-[10.5px] italic leading-normal line-clamp-2 ${
+                                            listThemeMode === 'light' ? 'text-slate-600' : 'text-slate-355'
+                                          }`}>
+                                            "{item.description}"
+                                          </p>
+                                        )}
+                                        {item.tags && item.tags.length > 0 && (
+                                          <div className="flex flex-wrap gap-1 mt-0.5">
+                                            {item.tags.map((tag, tIdx) => (
+                                              <span 
+                                                key={tIdx} 
+                                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                                  listThemeMode === 'light'
+                                                    ? 'bg-amber-100 text-amber-800 border border-amber-200/50'
+                                                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                                }`}
+                                              >
+                                                #{tag}
+                                              </span>
+                                            ))}
+                                          </div>
                                         )}
                                       </div>
                                     )}
@@ -2312,11 +2662,38 @@ export default function App() {
                                           </>
                                         )}
                                       </div>
+
+                                      {/* Inline Metadata Summary for list view */}
+                                      {(item.description || item.author || (item.tags && item.tags.length > 0)) && (
+                                        <div className="flex flex-wrap items-center gap-2 mt-1 px-1 py-0.5 rounded text-[9.5px]">
+                                          {item.author && (
+                                            <span className={`px-1.5 rounded font-bold font-sans ${listThemeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-slate-900 text-slate-350'}`}>By {item.author}</span>
+                                          )}
+                                          {item.description && (
+                                            <span className="italic text-slate-400 truncate max-w-[200px] sm:max-w-[320px]">"{item.description}"</span>
+                                          )}
+                                          {item.tags && item.tags.length > 0 && (
+                                            <div className="flex gap-1.5">
+                                              {item.tags.slice(0, 3).map((tag, tIdx) => (
+                                                <span key={tIdx} className="text-amber-400 font-extrabold font-mono text-[9px]">#{tag}</span>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                   
                                   {/* Action Buttons Row */}
                                   <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0" onClick={(e) => e.stopPropagation()}>
+                                    <button 
+                                      onClick={() => handleOpenMetadataEditor(item)}
+                                      className="p-1.5 bg-slate-900/95 hover:bg-indigo-650 text-indigo-400 hover:text-white rounded-md transition-colors border border-slate-800/60 flex items-center justify-center cursor-pointer"
+                                      title="Edit Page Metadata (Tags, Description, Author)"
+                                    >
+                                      <Sliders className="w-3.5 h-3.5" />
+                                    </button>
+
                                     <button 
                                       onClick={(e) => handleRotateItem(item.id, e)}
                                       className={`p-1.5 bg-slate-900/90 ${ta.hoverBg} hover:text-white text-slate-300 rounded-md transition-colors border border-slate-800/60 flex items-center justify-center cursor-pointer`}
@@ -2413,6 +2790,13 @@ export default function App() {
                                   
                                   {/* Actions panel sliding in on hover */}
                                   <div className="hidden group-hover:flex items-center gap-1 bg-slate-950 border border-slate-850 rounded-md p-1 absolute right-1 z-10" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      onClick={() => handleOpenMetadataEditor(item)}
+                                      className="p-0.5 hover:text-white text-indigo-400 cursor-pointer"
+                                      title="Edit Page Metadata"
+                                    >
+                                      <Sliders className="w-3 h-3" />
+                                    </button>
                                     <button
                                       onClick={(e) => handleRotateItem(item.id, e)}
                                       className="p-0.5 hover:text-white text-slate-400 cursor-pointer"
@@ -2591,6 +2975,142 @@ export default function App() {
         )}
 
       </main>
+
+      {/* ======================= PAGE METADATA EDITOR DIALOG MODAL ======================= */}
+      {metadataEditingItem && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in" onClick={() => setMetadataEditingItem(null)}>
+          <div 
+            className={`${t.bgCard} border border-solid ${t.borderCard} max-w-lg w-full rounded-[24px] overflow-hidden shadow-[0_12px_60px_rgba(0,0,0,0.85)] p-6 relative space-y-4 animate-scale-up`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3.5 border-b border-slate-700/40">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Sliders className={`w-5 h-5 ${t.textAccent}`} />
+                Edit Page Metadata
+              </h3>
+              <button 
+                onClick={() => setMetadataEditingItem(null)}
+                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Thumbnail preview and type indicator */}
+            <div className="flex gap-4 p-3 bg-slate-950/45 border border-slate-800/40 rounded-xl">
+              <div className="w-16 h-16 rounded bg-slate-950 flex items-center justify-center p-1 relative shrink-0 overflow-hidden border border-slate-800">
+                <img 
+                  src={metadataEditingItem.dataUrl} 
+                  alt="" 
+                  referrerPolicy="no-referrer"
+                  style={{ transform: `rotate(${metadataEditingItem.rotation || 0}deg)` }}
+                  className="max-w-full max-h-full object-contain rounded-sm"
+                />
+              </div>
+              <div className="min-w-0 flex-1 flex flex-col justify-center">
+                <p className="text-xs text-slate-400 font-mono font-medium">
+                  TYPE: <span className="text-purple-400 font-bold uppercase">{metadataEditingItem.type}</span> 
+                  {metadataEditingItem.pageIndex !== undefined && ` • PAGE ${metadataEditingItem.pageIndex + 1}`}
+                </p>
+                <p className="text-xs text-slate-500 font-mono mt-1">
+                  DIMENSIONS: <span className="text-emerald-400 font-bold">{metadataEditingItem.width} × {metadataEditingItem.height} px</span>
+                </p>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  FILE SIZE: <span className="text-amber-400 font-bold">{normalizeFileSize(metadataEditingItem.fileSize)}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Input Form Fields */}
+            <div className="space-y-4">
+              {/* Name field */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">Page/Document Name</label>
+                <input 
+                  type="text"
+                  value={metaName}
+                  onChange={(e) => setMetaName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 focus:outline-none transition-all placeholder-slate-500"
+                  placeholder="e.g. Invoice_Page_1"
+                />
+              </div>
+
+              {/* Author / Creator field */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">Author / Creator</label>
+                <input 
+                  type="text"
+                  value={metaAuthor}
+                  onChange={(e) => setMetaAuthor(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 focus:outline-none transition-all placeholder-slate-500"
+                  placeholder="e.g. John Doe, Admin, Finance Dept"
+                />
+              </div>
+
+              {/* Notes / Description field */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">Description / Notes</label>
+                <textarea 
+                  rows={3}
+                  value={metaDescription}
+                  onChange={(e) => setMetaDescription(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 focus:outline-none transition-all placeholder-slate-500 resize-none"
+                  placeholder="e.g. Scanned receipt for Q3 travel expenses with visible date..."
+                />
+              </div>
+
+              {/* Tags field */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-300">Custom Tags / Categories</label>
+                  <span className="text-[10px] text-slate-500 font-mono">Separate with commas</span>
+                </div>
+                <input 
+                  type="text"
+                  value={metaTagsInput}
+                  onChange={(e) => setMetaTagsInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 focus:outline-none transition-all placeholder-slate-500"
+                  placeholder="e.g. invoice, scanned, urgent, receipts"
+                />
+                
+                {/* Real-time Tags Pill Preview */}
+                {metaTagsInput && (
+                  <div className="flex flex-wrap gap-1.5 pt-1.5">
+                    {metaTagsInput.split(',').map((t, idx) => {
+                      const clean = t.trim();
+                      if (!clean) return null;
+                      return (
+                        <span key={idx} className="text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-0.5 rounded-full">
+                          #{clean}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Actions Row */}
+            <div className="flex items-center justify-end gap-2.5 pt-3.5 border-t border-slate-800/80 mt-4">
+              <button 
+                onClick={() => setMetadataEditingItem(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800/60 transition-all rounded-xl cursor-pointer border border-slate-800 focus:outline-none"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSaveMetadata}
+                style={{ backgroundColor: t.primary }}
+                className="px-5 py-2 text-xs font-bold text-white hover:opacity-90 active:scale-95 transition-all rounded-xl shadow-lg cursor-pointer flex items-center gap-1.5 focus:outline-none font-sans"
+              >
+                <Check className="w-4 h-4 text-white stroke-[2.5px]" />
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ======================= EXPORT FILENAME DIALOG MODAL ======================= */}
       {showExportModal && (() => {

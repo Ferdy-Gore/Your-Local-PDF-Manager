@@ -13,6 +13,9 @@ export interface WorkspaceItem {
   aspectRatio?: string; // Standard or computed aspect ratio (e.g. 16:9, 9:16)
   rotation?: number;   // Rotation angle in degrees (0, 90, 180, 270)
   originalDataUrl?: string; // Optional raw data url before any cropping
+  description?: string; // Optional custom description/notes
+  author?: string;      // Optional custom author name
+  tags?: string[];      // Optional custom tags
 }
 
 export interface SavedPDFBundle {
