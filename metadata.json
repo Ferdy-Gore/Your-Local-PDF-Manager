@@ -1,0 +1,6 @@
+{
+  "name": "LocalPDFManager",
+  "description": "Stunning offline local PDF page editor and compiler. Upload PDFs and PNGs, dynamically reorder pages via Drag & Drop, and compile them to a single PDF completely offline in your browser. Read and download the PySide6 standalone desktop script.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
