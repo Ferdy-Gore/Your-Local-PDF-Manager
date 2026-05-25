@@ -48,8 +48,8 @@
       "main.cjs"
     ],
     "win": {
-      "target": "nsis"
-      
+      "target": "nsis",
+      "icon": "LocalPDFManagerLogo.png"
     }
   }
 }

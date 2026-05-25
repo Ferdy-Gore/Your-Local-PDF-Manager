@@ -935,7 +935,7 @@ export default function App() {
       id: `bundle-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       name: customName || `Untitled Custom Layout`,
       fileSize: 'Custom',
-      pages: [...items]
+      pages: [...displayedItems]
     };
     setSavedPDFBundles(prev => [...prev, newBundle]);
     setStatus(`Successfully backed up entire active layout to Saved PDF Library.`);
@@ -1226,8 +1226,8 @@ export default function App() {
   // Compile full list (or selected subset) into a brand new PDF locally on the computer
   const handleExportToPdf = async () => {
     const itemsToExport = exportOnlySelected 
-      ? items.filter(it => selectedIds.includes(it.id))
-      : items;
+      ? displayedItems.filter(it => selectedIds.includes(it.id))
+      : displayedItems;
 
     if (itemsToExport.length === 0) {
       if (exportOnlySelected) {
@@ -3115,8 +3115,8 @@ export default function App() {
       {/* ======================= EXPORT FILENAME DIALOG MODAL ======================= */}
       {showExportModal && (() => {
         const compileList = exportOnlySelected 
-          ? items.filter(item => selectedIds.includes(item.id))
-          : items;
+          ? displayedItems.filter(item => selectedIds.includes(item.id))
+          : displayedItems;
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm transition-all duration-300">
